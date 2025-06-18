@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "node server.js",
     "build": "next build",
-    "start": "NODE_ENV=production node server.js",
-    "lint": "next lint"
+    "dev": "node server.js",
+    "lint": "next lint",
+    "start": "NODE_ENV=production node server.js"
   },
   "dependencies": {
     "@google-cloud/spanner": "latest",
@@ -74,6 +74,7 @@
     "recharts": "2.15.0",
     "redis": "latest",
     "reflect-metadata": "latest",
+    "sharp": "^0.32.6",
     "sonner": "^1.7.1",
     "sql.js": "latest",
     "sqlite3": "latest",
