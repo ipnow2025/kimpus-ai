@@ -21,27 +21,40 @@ const AIAssistantView: React.FC<AIAssistantViewProps> = ({ courses, isDarkMode, 
   const [isAiLoading, setIsAiLoading] = useState(false)
   const [activeTab, setActiveTab] = useState("assignment")
 
-  const handleGenerate = async (prompt: string, type?: "plagiarism" | "assignment" | "question") => {
+  // 🚨 TODO: ChatGPT API 연결 - 이 함수가 핵심 연결 부분입니다
+  const handleGenerate = async (prompt: string, type?: "assignment" | "question" | "chat") => {
     setIsAiLoading(true)
     setAiResponse("")
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1500 + Math.random() * 1000))
 
-    let responseText = `김조교 AI의 시뮬레이션 응답입니다 🤖\n-------------------------------------\n`
+    try {
+      // 🔧 실제 ChatGPT API 호출
+      const response = await fetch("/api/ai/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          prompt,
+          type: type || activeTab,
+          context: {
+            // 추가 컨텍스트 정보
+          },
+        }),
+      })
 
-    switch (type) {
-      case "assignment":
-        responseText += `요청하신 과제 초안입니다:\n\n${prompt}\n\n(추가 내용 생성 중...)`
-        break
-      case "question":
-        responseText += `질문에 대한 답변입니다:\n\n${prompt}\n\n(상세 설명 추가 중...)`
-        break
-      default:
-        responseText += prompt
+      const data = await response.json()
+
+      if (data.success) {
+        setAiResponse(data.data.content)
+      } else {
+        setAiResponse(`오류가 발생했습니다: ${data.error}`)
+      }
+    } catch (error) {
+      console.error("AI 생성 오류:", error)
+      setAiResponse("AI 응답 생성 중 오류가 발생했습니다. 다시 시도해주세요.")
+    } finally {
+      setIsAiLoading(false)
     }
-
-    setAiResponse(responseText)
-    setIsAiLoading(false)
   }
 
   const cardClass = isDarkMode ? "bg-gray-800 border-gray-700" : "bg-white"
