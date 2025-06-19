@@ -4,9 +4,10 @@ import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import type React from "react"
 import { useState, useEffect, useRef } from "react"
-import type { Team, Assignment, User } from "@/lib/types"
+import type { Team, Assignment, User, TeamTask, TeamChatMessage } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -27,13 +28,6 @@ import {
   CheckCircle,
   XCircle,
 } from "lucide-react"
-
-import { useTeamTasksQuery } from "@/hooks/use-team-tasks-query"
-import { useTeamChatQuery } from "@/hooks/use-team-chat-query"
-import { useWebSocket } from "@/hooks/use-websocket"
-import { OnlineUsers } from "@/components/collaboration/OnlineUsers"
-import { TypingIndicator } from "@/components/collaboration/TypingIndicator"
-import { CollaborativeTextarea } from "@/components/collaboration/CollaborativeTextarea"
 
 interface TeamWorkspaceViewProps {
   team: Team | null
@@ -61,18 +55,12 @@ const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
   onRejectInvitation,
 }) => {
   const [sharedNotes, setSharedNotes] = useState("")
+  const [tasks, setTasks] = useState<TeamTask[]>([])
   const [newTaskText, setNewTaskText] = useState("")
+  const [messages, setMessages] = useState<TeamChatMessage[]>([])
   const [newChatMessage, setNewChatMessage] = useState("")
+  const [isSending, setIsSending] = useState(false)
   const chatScrollAreaRef = useRef<HTMLDivElement>(null)
-
-  // 기존 상태들 제거하고 React Query hooks로 교체
-  const { tasks, addTask, updateTask, deleteTask } = useTeamTasksQuery(team?.id || "")
-  const { messages, sendMessage, isSending } = useTeamChatQuery(team?.id || "")
-
-  // 기존 useState들 제거
-  // const [tasks, setTasks] = useState<TeamTask[]>([])
-  // const [messages, setMessages] = useState<TeamChatMessage[]>([])
-  // const [isSending, setIsSending] = useState(false)
 
   const scrollToBottom = () => {
     if (chatScrollAreaRef.current) {
@@ -89,45 +77,34 @@ const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
 
   useEffect(() => {
     if (!team) return
+
     setSharedNotes(`# ${assignment?.title || team.name} 작업 공간\n\n공동 작업 노트를 여기에 작성하세요.`)
+    setTasks([
+      { id: "task1", text: "자료 조사", completed: true, assignedTo: team.members[0]?.id },
+      { id: "task2", text: "초안 작성", completed: false },
+      { id: "task3", text: "최종 검토", completed: false, assignedTo: team.members[1]?.id },
+    ])
+
+    const fetchMessages = async () => {
+      try {
+        const response = await fetch(`/api/chat/${team.id}`)
+        if (response.ok) {
+          const data: TeamChatMessage[] = await response.json()
+          setMessages(data)
+        }
+      } catch (error) {
+        console.error("Failed to fetch messages:", error)
+      }
+    }
+
+    fetchMessages()
+    const intervalId = setInterval(fetchMessages, 3000)
+    return () => clearInterval(intervalId)
   }, [team, assignment])
 
   useEffect(() => {
     scrollToBottom()
   }, [messages])
-
-  // WebSocket 연결
-  const {
-    isConnected,
-    onlineUsers,
-    typingUsers,
-    sendChatMessage: wsSendMessage,
-    sendTypingStatus,
-    sendNoteUpdate,
-    sendTaskUpdate,
-  } = useWebSocket({
-    userId: currentUser.id,
-    userName: currentUser.name,
-    teamId: team?.id || "",
-    onMessage: (message) => {
-      switch (message.type) {
-        case "chat":
-          // 실시간 채팅 메시지 수신
-          setMessages((prev) => [...prev, message.data])
-          break
-        case "note-update":
-          // 실시간 노트 업데이트
-          if (message.data.updatedBy !== currentUser.name) {
-            setSharedNotes(message.data.content)
-          }
-          break
-        case "task-update":
-          // 실시간 태스크 업데이트
-          // React Query가 자동으로 처리하므로 invalidate만 수행
-          break
-      }
-    },
-  })
 
   if (!team) {
     return (
@@ -138,73 +115,50 @@ const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
     )
   }
 
-  const handleAddTask = async () => {
+  const handleAddTask = () => {
     if (newTaskText.trim()) {
-      try {
-        await addTask({ text: newTaskText, completed: false })
-        setNewTaskText("")
-      } catch (error) {
-        console.error("Failed to add task:", error)
-      }
+      setTasks([...tasks, { id: `task${Date.now()}`, text: newTaskText, completed: false }])
+      setNewTaskText("")
     }
   }
 
-  const handleToggleTask = async (taskId: string) => {
-    const task = tasks.find((t) => t.id === taskId)
-    if (task) {
-      try {
-        await updateTask(taskId, { completed: !task.completed })
-      } catch (error) {
-        console.error("Failed to toggle task:", error)
-      }
-    }
+  const handleToggleTask = (taskId: string) => {
+    setTasks(tasks.map((task) => (task.id === taskId ? { ...task, completed: !task.completed } : task)))
   }
 
-  const handleDeleteTask = async (taskId: string) => {
-    try {
-      await deleteTask(taskId)
-    } catch (error) {
-      console.error("Failed to delete task:", error)
-    }
+  const handleDeleteTask = (taskId: string) => {
+    setTasks(tasks.filter((task) => task.id !== taskId))
   }
 
   const handleSendChatMessage = async () => {
     if (!newChatMessage.trim() || isSending) return
+    setIsSending(true)
+
+    const messagePayload = {
+      userId: currentUser.id,
+      userName: currentUser.name,
+      message: newChatMessage,
+    }
 
     try {
-      // WebSocket으로 실시간 전송
-      wsSendMessage(newChatMessage)
+      const response = await fetch(`/api/chat/${team.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(messagePayload),
+      })
 
-      // 서버에도 저장
-      await sendMessage(newChatMessage)
-      setNewChatMessage("")
+      if (response.ok) {
+        const newMessage: TeamChatMessage = await response.json()
+        setMessages((prev) => [...prev, newMessage])
+        setNewChatMessage("")
+      } else {
+        console.error("Failed to send message")
+      }
     } catch (error) {
-      console.error("Failed to send message:", error)
+      console.error("Error sending message:", error)
+    } finally {
+      setIsSending(false)
     }
-  }
-
-  // 타이핑 상태 처리
-  const typingTimeoutRef = useRef<NodeJS.Timeout>()
-  const [isTyping, setIsTyping] = useState(false)
-
-  const handleChatInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setNewChatMessage(e.target.value)
-
-    // 타이핑 시작 알림
-    if (!isTyping) {
-      sendTypingStatus(true)
-      setIsTyping(true)
-    }
-
-    // 타이핑 중지 타이머 설정
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current)
-    }
-
-    typingTimeoutRef.current = setTimeout(() => {
-      sendTypingStatus(false)
-      setIsTyping(false)
-    }, 1000)
   }
 
   const cardClass = isDarkMode ? "bg-gray-800 border-gray-700" : "bg-white"
@@ -237,12 +191,9 @@ const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <CollaborativeTextarea
+            <Textarea
               value={sharedNotes}
-              onChange={setSharedNotes}
-              onContentChange={(content, position) => {
-                sendNoteUpdate(content, position)
-              }}
+              onChange={(e) => setSharedNotes(e.target.value)}
               rows={isMobile ? 10 : 15}
               className={`${inputClass} text-sm leading-relaxed`}
               placeholder="여기에 팀 노트를 작성하세요..."
@@ -323,13 +274,6 @@ const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
             </CardContent>
           </Card>
 
-          <OnlineUsers
-            users={onlineUsers}
-            currentUserId={currentUser.id}
-            isConnected={isConnected}
-            isDarkMode={isDarkMode}
-          />
-
           <Card className={`${cardClass}`}>
             <CardHeader>
               <CardTitle className={`${textClass} flex items-center text-lg`}>
@@ -338,7 +282,7 @@ const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
             </CardHeader>
             <CardContent className="space-y-2">
               <ScrollArea className="h-40 pr-2">
-                {tasks?.map((task) => (
+                {tasks.map((task) => (
                   <div key={task.id} className="flex items-center justify-between space-x-2 py-1 group">
                     <div className="flex items-center space-x-2">
                       <Checkbox
@@ -388,13 +332,12 @@ const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <TypingIndicator typingUsers={typingUsers} currentUserId={currentUser.id} isDarkMode={isDarkMode} />
           <ScrollArea
             className={`h-64 border rounded-md p-3 ${isDarkMode ? "border-gray-700" : "border-gray-200"}`}
             ref={chatScrollAreaRef}
           >
             <div className="space-y-3">
-              {messages?.map((msg) => (
+              {messages.map((msg) => (
                 <div key={msg.id} className={`flex ${msg.userId === currentUser.id ? "justify-end" : "justify-start"}`}>
                   <div
                     className={`max-w-[70%] p-2 rounded-lg ${msg.userId === currentUser.id ? (isDarkMode ? "bg-blue-700" : "bg-blue-500 text-white") : isDarkMode ? "bg-gray-700" : "bg-gray-200"}`}
@@ -416,7 +359,7 @@ const TeamWorkspaceView: React.FC<TeamWorkspaceViewProps> = ({
           <div className="flex w-full items-center space-x-2">
             <Input
               value={newChatMessage}
-              onChange={handleChatInputChange}
+              onChange={(e) => setNewChatMessage(e.target.value)}
               placeholder="메시지 입력..."
               className={`${inputClass} flex-grow`}
               onKeyPress={(e) => e.key === "Enter" && handleSendChatMessage()}
